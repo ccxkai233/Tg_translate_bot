@@ -1,0 +1,8 @@
+# 密钥和运行时数据, 绝对不要提交
+.env
+bot.db
+bot.db-journal
+
+venv/
+__pycache__/
+*.pyc

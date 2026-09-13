@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram bilingual translate bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Tg_translate_bot
+EnvironmentFile=/root/Tg_translate_bot/.env
+ExecStart=/root/Tg_translate_bot/venv/bin/python /root/Tg_translate_bot/bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

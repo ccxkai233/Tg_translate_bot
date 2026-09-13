@@ -1,0 +1,3 @@
+python-telegram-bot[rate-limiter]>=21
+langdetect
+httpx
