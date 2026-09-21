@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="robots" content="noindex, nofollow">
+<title>对话面板</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💬</text></svg>">
+<style>
+:root {
+  --bg: #ffffff; --side: #ffffff; --line: #e4e7ea; --hover: #f1f3f4; --active: #3390ec; --active-text: #fff;
+  --text: #111418; --muted: #707579; --accent: #3390ec;
+  --chat-bg: #d5dfc8; --in: #ffffff; --out: #eeffde; --out-meta: #4fae4e; --sys: rgba(0,0,0,.28);
+  --tr: #3a6d99; --tr-line: rgba(0,0,0,.09); --danger: #e53935; --input: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #212121; --side: #212121; --line: #0f0f0f; --hover: #2c2c2c; --active: #766ac8; --active-text: #fff;
+    --text: #f1f1f1; --muted: #aaaaaa; --accent: #8774e1;
+    --chat-bg: #0f0f0f; --in: #212121; --out: #766ac8; --out-meta: #d5d0f5; --sys: rgba(255,255,255,.16);
+    --tr: #8fc3ff; --tr-line: rgba(255,255,255,.14); --danger: #ff6b66; --input: #2c2c2c;
+  }
+  .msg.out .tr { color: #e6e1ff !important; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Noto Sans", sans-serif;
+  color: var(--text); background: var(--bg); overflow: hidden;
+}
+button, select, textarea { font: inherit; color: inherit; }
+#app { display: grid; grid-template-columns: minmax(280px, 360px) 1fr; height: 100dvh; }
+
+/* ---------- 左侧列表 ---------- */
+#side { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+#side header { padding: 10px 14px; display: flex; gap: 10px; align-items: center; }
+#side h1 { font-size: 18px; margin: 0; font-weight: 600; flex: none; }
+#search { flex: 1; min-width: 0; border: 0; border-radius: 20px; padding: 8px 14px; background: var(--hover); color: var(--text); outline: none; font: inherit; }
+#list { flex: 1; overflow-y: auto; padding: 0 6px 12px; }
+.chat { display: flex; gap: 10px; padding: 8px; border-radius: 10px; cursor: pointer; align-items: center; user-select: none; }
+.chat:hover { background: var(--hover); }
+.chat.active { background: var(--active); color: var(--active-text); }
+.chat.active .prev, .chat.active .when { color: rgba(255,255,255,.82); }
+.chat.active .badge { background: #fff; color: var(--active); }
+.avatar { flex: none; width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 600; font-size: 19px; }
+.chat .mid { flex: 1; min-width: 0; }
+.chat .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.chat .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat .when { font-size: 12px; color: var(--muted); flex: none; }
+.chat .prev { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+.badge { flex: none; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; display: grid; place-items: center; }
+.empty { color: var(--muted); text-align: center; padding: 40px 20px; }
+
+/* ---------- 右侧对话 ---------- */
+#main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--chat-bg); position: relative; }
+#placeholder { margin: auto; background: var(--sys); color: #fff; padding: 4px 14px; border-radius: 14px; font-size: 14px; }
+#top { background: var(--side); border-bottom: 1px solid var(--line); padding: 7px 12px; display: flex; align-items: center; gap: 10px; min-height: 56px; }
+#back { display: none; border: 0; background: none; font-size: 24px; padding: 4px 8px 4px 0; cursor: pointer; color: var(--muted); }
+#top .avatar { width: 40px; height: 40px; font-size: 16px; }
+#top .who { flex: 1; min-width: 0; }
+#top .who b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#top .who small { color: var(--muted); }
+#top .who a { color: var(--accent); text-decoration: none; }
+#top select, #top button.tool { border: 1px solid var(--line); background: var(--input); border-radius: 8px; padding: 6px 8px; cursor: pointer; max-width: 150px; }
+#top button.tool.on { color: var(--danger); border-color: var(--danger); }
+#msgs { flex: 1; overflow-y: auto; padding: 10px max(12px, calc((100% - 760px) / 2)) 6px; display: flex; flex-direction: column; gap: 3px; overscroll-behavior: contain; }
+#older { align-self: center; border: 0; background: var(--sys); color: #fff; border-radius: 14px; padding: 4px 14px; cursor: pointer; margin-bottom: 6px; }
+.day, .sysline { align-self: center; background: var(--sys); color: #fff; padding: 3px 12px; border-radius: 14px; font-size: 13px; margin: 8px 0 4px; text-align: center; max-width: 90%; }
+.day { position: sticky; top: 2px; z-index: 1; }
+.msg { max-width: min(78%, 560px); padding: 6px 10px 7px; border-radius: 14px; background: var(--in); align-self: flex-start; box-shadow: 0 1px 1.5px rgba(0,0,0,.14); word-break: break-word; white-space: pre-wrap; border-bottom-left-radius: 5px; position: relative; }
+.msg.out { background: var(--out); align-self: flex-end; border-bottom-left-radius: 14px; border-bottom-right-radius: 5px; }
+.msg.pending { opacity: .6; }
+.msg.failed { outline: 2px solid var(--danger); }
+.msg a { color: var(--accent); }
+.msg .tr { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--tr-line); color: var(--tr); font-size: 14.5px; }
+.msg .tr::before { content: "译 "; font-size: 11px; opacity: .7; border: 1px solid currentColor; border-radius: 4px; padding: 0 3px; margin-right: 4px; vertical-align: 1px; }
+.msg.out .tr::before { content: "已发送 "; }
+.msg .meta { float: right; margin: 6px 0 -3px 12px; font-size: 11.5px; color: var(--muted); user-select: none; }
+.msg.out .meta { color: var(--out-meta); }
+.msg .err { color: var(--danger); font-size: 13px; margin-top: 4px; }
+.msg img.media, .msg video.media { display: block; max-width: 100%; max-height: 360px; border-radius: 9px; margin: -1px 0 5px; cursor: zoom-in; background: rgba(0,0,0,.06); }
+.msg img.sticker { max-width: 160px; max-height: 160px; background: none; cursor: default; }
+.msg audio { display: block; max-width: 100%; width: 280px; margin-bottom: 4px; }
+.msg .file { display: flex; gap: 9px; align-items: center; text-decoration: none; color: inherit; margin-bottom: 3px; }
+.msg .file i { flex: none; width: 42px; height: 42px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-style: normal; font-size: 19px; }
+.msg .ph { color: var(--muted); font-style: italic; }
+.bigemoji { font-size: 56px; line-height: 1.1; }
+
+/* ---------- 输入区 ---------- */
+#composer { padding: 6px max(12px, calc((100% - 760px) / 2)) max(10px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 6px; }
+#attach-chip { display: none; align-self: flex-start; background: var(--input); border-radius: 12px; padding: 5px 10px; font-size: 13px; align-items: center; gap: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.15); max-width: 100%; }
+#attach-chip.show { display: flex; }
+#attach-chip img { width: 38px; height: 38px; object-fit: cover; border-radius: 6px; }
+#attach-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#attach-chip button { border: 0; background: none; cursor: pointer; font-size: 17px; color: var(--muted); }
+#bar { display: flex; gap: 8px; align-items: flex-end; }
+#inputwrap { flex: 1; background: var(--input); border-radius: 22px; display: flex; align-items: flex-end; box-shadow: 0 1px 2px rgba(0,0,0,.15); min-width: 0; }
+#text { flex: 1; min-width: 0; border: 0; outline: none; background: none; resize: none; padding: 11px 4px 11px 16px; max-height: 180px; line-height: 1.35; }
+#attach { border: 0; background: none; cursor: pointer; font-size: 21px; padding: 9px 12px; color: var(--muted); }
+#send { flex: none; width: 46px; height: 46px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; cursor: pointer; font-size: 20px; display: grid; place-items: center; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+#send:disabled { opacity: .5; cursor: default; }
+#hint { font-size: 12px; color: #fff; background: var(--sys); align-self: center; padding: 1px 10px; border-radius: 10px; }
+#hint:empty { display: none; }
+
+#lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; place-items: center; z-index: 10; cursor: zoom-out; }
+#lightbox.show { display: grid; }
+#lightbox img { max-width: 96vw; max-height: 96vh; }
+#offline { display: none; position: fixed; top: 8px; left: 50%; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 4px 14px; border-radius: 14px; font-size: 13px; z-index: 20; }
+#offline.show { display: block; }
+
+@media (max-width: 760px) {
+  #app { grid-template-columns: 1fr; }
+  #main { display: none; }
+  body.in-chat #side { display: none; }
+  body.in-chat #main { display: flex; }
+  #back { display: block; }
+  .msg { max-width: 86%; }
+  #top select { max-width: 104px; }
+}
+</style>
+</head>
+<body>
+<div id="offline">连接中断，正在重试…</div>
+<div id="app">
+  <aside id="side">
+    <header><h1>对话</h1><input id="search" type="search" placeholder="搜索" autocomplete="off"></header>
+    <div id="list"><div class="empty">加载中…</div></div>
+  </aside>
+  <main id="main">
+    <div id="placeholder">选择一个对话开始聊天</div>
+    <div id="top" hidden>
+      <button id="back" title="返回">‹</button>
+      <div class="avatar" id="top-avatar"></div>
+      <div class="who"><b id="top-name"></b><small id="top-sub"></small></div>
+      <select id="lang" title="对方的语言（你的回复会翻译成它）"></select>
+      <button class="tool" id="block"></button>
+    </div>
+    <div id="msgs" hidden></div>
+    <div id="composer" hidden>
+      <div id="hint"></div>
+      <div id="attach-chip"><img alt="" hidden><span></span><button title="移除">✕</button></div>
+      <div id="bar">
+        <div id="inputwrap">
+          <textarea id="text" rows="1" placeholder="用中文写，自动翻译后发出…"></textarea>
+          <button id="attach" title="发送图片/文件">📎</button>
+        </div>
+        <button id="send" title="发送">➤</button>
+      </div>
+      <input id="file" type="file" hidden>
+    </div>
+  </main>
+</div>
+<div id="lightbox"><img alt=""></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const COLORS = ["#e17076", "#eda86c", "#a695e7", "#7bc862", "#6ec9cb", "#65aadd", "#ee7aae"];
+const KIND_LABEL = { photo: "🖼 图片", sticker: "贴纸", animation: "GIF", video: "🎬 视频", voice: "🎤 语音", audio: "🎵 音频", document: "📄 文件", other: "不支持在网页显示的消息（请在 Telegram 里查看）" };
+const coarse = matchMedia("(pointer: coarse)").matches;
+
+const state = { chats: [], current: null, msgs: [], maxId: -1, meta: { langs: {}, owner_lang: "zh" }, attach: null, sending: false, filter: "", hasOlder: false };
+
+// ---------- 网络 ----------
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ "X-Panel": "1" }, opts.headers || {});
+  if (opts.json !== undefined) { opts.method = "POST"; opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
+  const r = await fetch(path, opts);
+  if (r.status === 401) { location.reload(); throw new Error("unauthorized"); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+  return data;
+}
+
+// ---------- 小工具 ----------
+const pad = (n) => String(n).padStart(2, "0");
+const hhmm = (ts) => { const d = new Date(ts * 1000); return pad(d.getHours()) + ":" + pad(d.getMinutes()); };
+const dayKey = (ts) => new Date(ts * 1000).toDateString();
+function dayLabel(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  if (d.toDateString() === now.toDateString()) return "今天";
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "昨天";
+  return (d.getFullYear() === now.getFullYear() ? "" : d.getFullYear() + "年") + (d.getMonth() + 1) + "月" + d.getDate() + "日";
+}
+function listTime(ts) {
+  const d = new Date(ts * 1000), now = new Date();
+  if (d.toDateString() === now.toDateString()) return hhmm(ts);
+  if (now - d < 6 * 86400e3) return "周" + "日一二三四五六"[d.getDay()];
+  return (d.getMonth() + 1) + "/" + d.getDate();
+}
+function avatar(node, chat) {
+  node.style.background = COLORS[Math.abs(chat.user_id) % COLORS.length];
+  node.textContent = [...(chat.name || "?").trim()].slice(0, 1).join("").toUpperCase() || "?";
+}
+function preview(m) {
+  if (!m) return "";
+  const body = m.dir === "in" ? (m.translated || m.text) : m.text;
+  const label = m.kind !== "text" && m.kind !== "other" ? KIND_LABEL[m.kind] || "" : "";
+  return (m.dir === "out" ? "你: " : "") + [label, body].filter(Boolean).join(" ") || (m.kind === "other" ? "[消息]" : "");
+}
+// 只把 http(s) 链接变成 <a>, 其余全部走 textContent, 对方发来的内容不会被当成 HTML
+function fillText(node, text) {
+  const re = /https?:\/\/[^\s<>"']+/g; let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) node.append(text.slice(last, m.index));
+    const a = el("a", null, m[0]); a.href = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer";
+    node.append(a); last = m.index + m[0].length;
+  }
+  if (last < text.length) node.append(text.slice(last));
+}
+
+// ---------- 左侧列表 ----------
+function renderList() {
+  const list = $("list"); list.textContent = "";
+  const f = state.filter.toLowerCase();
+  const chats = state.chats.filter((c) => !f || (c.name || "").toLowerCase().includes(f) || (c.username || "").toLowerCase().includes(f) || String(c.user_id).includes(f));
+  if (!chats.length) { list.append(el("div", "empty", state.chats.length ? "没有匹配的对话" : "还没有人私聊机器人")); return; }
+  for (const c of chats) {
+    const row = el("div", "chat" + (c.user_id === state.current ? " active" : ""));
+    const av = el("div", "avatar"); avatar(av, c);
+    const mid = el("div", "mid");
+    const r1 = el("div", "row"); r1.append(el("span", "name", (c.blocked ? "🚫 " : "") + (c.name || c.user_id)), el("span", "when", c.last ? listTime(c.last.ts) : ""));
+    const r2 = el("div", "row"); r2.append(el("span", "prev", preview(c.last)));
+    if (c.unread && c.user_id !== state.current) r2.append(el("span", "badge", c.unread > 99 ? "99+" : c.unread));
+    mid.append(r1, r2); row.append(av, mid);
+    row.onclick = () => openChat(c.user_id);
+    list.append(row);
+  }
+  const unread = state.chats.reduce((n, c) => n + (c.user_id === state.current && !document.hidden ? 0 : c.unread), 0);
+  document.title = (unread ? "(" + unread + ") " : "") + "对话面板";
+}
+
+// ---------- 对话 ----------
+function renderTop() {
+  const c = state.chats.find((x) => x.user_id === state.current); if (!c) return;
+  avatar($("top-avatar"), c);
+  $("top-name").textContent = c.name || c.user_id;
+  const sub = $("top-sub"); sub.textContent = "";
+  if (c.username) { const a = el("a", null, "@" + c.username); a.href = "https://t.me/" + encodeURIComponent(c.username); a.target = "_blank"; a.rel = "noopener noreferrer"; sub.append(a, " · "); }
+  sub.append("ID " + c.user_id);
+  const sel = $("lang");
+  if (document.activeElement !== sel) sel.value = c.lang || "";
+  $("block").textContent = c.blocked ? "已拉黑" : "拉黑";
+  $("block").classList.toggle("on", c.blocked);
+  const same = c.lang && c.lang === state.meta.owner_lang;
+  $("hint").textContent = c.blocked ? "已拉黑：对方的消息不会转发给你" : (same ? "对方语言与你相同，原样发送" : "→ " + (state.meta.langs[c.lang] || c.lang || "未知语言"));
+}
+function bubble(m) {
+  if (m.dir === "sys") return el("div", "sysline", m.text);
+  const b = el("div", "msg " + (m.dir === "out" ? "out" : "in") + (m.pending ? " pending" : "") + (m.failed ? " failed" : ""));
+  b.dataset.id = m.id;
+  const src = "api/media/" + m.id;
+  if (m.has_file) {
+    const mime = m.mime || "";
+    if (m.kind === "photo" || (m.kind === "sticker" && mime.startsWith("image/")) || (m.kind === "document" && /^image\/(jpeg|png|gif|webp)$/.test(mime))) {
+      const img = el("img", "media" + (m.kind === "sticker" ? " sticker" : "")); img.src = src; img.loading = "lazy"; img.alt = "";
+      if (m.kind !== "sticker") img.onclick = () => { $("lightbox").firstElementChild.src = src; $("lightbox").classList.add("show"); };
+      img.onload = () => keepBottom(); b.append(img);
+    } else if (mime.startsWith("video/")) {
+      const v = el("video", "media"); v.src = src; v.preload = "metadata"; v.playsInline = true;
+      if (m.kind === "animation" || m.kind === "sticker") { v.autoplay = v.loop = v.muted = true; } else v.controls = true;
+      b.append(v);
+    } else if (mime.startsWith("audio/")) {
+      const a = el("audio"); a.src = src; a.controls = true; a.preload = "none"; b.append(a);
+    } else {
+      const a = el("a", "file"); a.href = src; a.download = m.file_name || "file";
+      a.append(el("i", null, "↓"), el("span", null, m.file_name || "文件")); b.append(a);
+    }
+  } else if (m.kind === "sticker") {
+    b.append(el("div", "bigemoji", m.file_name || "🙂"));
+  } else if (m.kind !== "text" && !m.localFile) {
+    b.append(el("div", "ph", KIND_LABEL[m.kind] || KIND_LABEL.other));
+  }
+  if (m.localFile) b.append(el("div", "ph", "📎 " + m.localFile));
+  if (m.text) { const t = el("span"); fillText(t, m.text); b.append(t); }
+  b.append(el("span", "meta", m.pending ? "翻译并发送中…" : hhmm(m.ts) + (m.via === "web" && m.dir === "out" ? " · 网页" : "")));
+  if (m.translated) { const t = el("div", "tr"); fillText(t, m.translated); b.append(t); }
+  if (m.failed) b.append(el("div", "err", "⚠️ " + m.failed));
+  return b;
+}
+function atBottom() { const b = $("msgs"); return b.scrollHeight - b.scrollTop - b.clientHeight < 120; }
+let stick = true;
+function keepBottom() { if (stick) { const b = $("msgs"); b.scrollTop = b.scrollHeight; } }
+function renderMsgs(forceBottom) {
+  const box = $("msgs"); stick = forceBottom || atBottom();
+  box.textContent = "";
+  if (state.hasOlder) { const o = el("button", null, "加载更早的消息"); o.id = "older"; o.onclick = loadOlder; box.append(o); }
+  let last = null;
+  for (const m of state.msgs) {
+    const k = dayKey(m.ts); if (k !== last) { box.append(el("div", "day", dayLabel(m.ts))); last = k; }
+    box.append(bubble(m));
+  }
+  keepBottom();
+}
+async function openChat(uid, replaceHash) {
+  state.current = uid; state.msgs = []; state.hasOlder = false;
+  document.body.classList.add("in-chat");
+  $("placeholder").hidden = true; for (const id of ["top", "msgs", "composer"]) $(id).hidden = false;
+  if (location.hash !== "#u=" + uid) history[replaceHash ? "replaceState" : "pushState"](null, "", "#u=" + uid);
+  clearAttach(); renderList(); renderTop(); renderMsgs(true);
+  try {
+    const d = await api("api/chats/" + uid + "/messages");
+    if (state.current !== uid) return;
+    state.msgs = d.msgs; state.hasOlder = d.msgs.length >= 100;
+    renderMsgs(true); markRead(uid);
+  } catch (e) { console.error(e); }
+  if (!coarse) $("text").focus();
+}
+async function loadOlder() {
+  const first = state.msgs.find((m) => m.id > 0); if (!first) return;
+  const box = $("msgs"), prevH = box.scrollHeight, uid = state.current;
+  const d = await api("api/chats/" + uid + "/messages?before=" + first.id);
+  if (state.current !== uid) return;
+  state.msgs = d.msgs.concat(state.msgs); state.hasOlder = d.msgs.length >= 100;
+  renderMsgs(false); box.scrollTop = box.scrollHeight - prevH;
+}
+function closeChat() {
+  state.current = null; document.body.classList.remove("in-chat");
+  $("placeholder").hidden = false; for (const id of ["top", "msgs", "composer"]) $(id).hidden = true;
+  renderList();
+}
+function markRead(uid) {
+  const c = state.chats.find((x) => x.user_id === uid);
+  if (c && c.unread && !document.hidden) { c.unread = 0; renderList(); api("api/chats/" + uid + "/read", { method: "POST" }).catch(() => {}); }
+}
+
+// ---------- 发送 ----------
+function clearAttach() { state.attach = null; $("file").value = ""; $("attach-chip").classList.remove("show"); }
+function setAttach(file) {
+  if (!file) return;
+  if (file.size > 50 * 1024 * 1024) { alert("文件超过 50MB，Telegram 机器人发不了。"); return; }
+  state.attach = file;
+  const chip = $("attach-chip"), img = chip.querySelector("img");
+  chip.querySelector("span").textContent = file.name + " · " + (file.size / 1024 < 1024 ? Math.ceil(file.size / 1024) + " KB" : (file.size / 1048576).toFixed(1) + " MB");
+  if (file.type.startsWith("image/")) { img.src = URL.createObjectURL(file); img.hidden = false; } else img.hidden = true;
+  chip.classList.add("show");
+}
+async function send() {
+  const uid = state.current, text = $("text").value.trim(), file = state.attach;
+  if (!uid || state.sending || (!text && !file)) return;
+  state.sending = true; $("send").disabled = true;
+  const temp = { id: -Date.now(), dir: "out", text, kind: file ? "document" : "text", localFile: file ? file.name : null, ts: Date.now() / 1000, pending: true };
+  state.msgs.push(temp); $("text").value = ""; autosize(); clearAttach(); renderMsgs(true);
+  try {
+    let opts;
+    if (file) { const fd = new FormData(); fd.append("text", text); fd.append("file", file, file.name); opts = { method: "POST", body: fd }; }
+    else opts = { json: { text } };
+    const saved = await api("api/chats/" + uid + "/send", opts);
+    const i = state.msgs.indexOf(temp);
+    if (state.msgs.some((m) => m.id === saved.id)) state.msgs.splice(i, 1); else state.msgs[i] = saved;  // 轮询可能已经先拿到了
+    state.maxId = Math.max(state.maxId, saved.id);
+  } catch (e) {
+    temp.pending = false; temp.failed = e.message;
+    if (state.current === uid && !$("text").value) { $("text").value = text; autosize(); }
+  }
+  state.sending = false; $("send").disabled = false;
+  if (state.current === uid) renderMsgs(true);
+}
+function autosize() { const t = $("text"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 180) + "px"; }
+
+// ---------- 轮询 ----------
+let failures = 0;
+async function poll() {
+  try {
+    const d = await api("api/poll?after=" + state.maxId);
+    failures = 0; $("offline").classList.remove("show");
+    state.chats = d.chats;
+    let touched = false;
+    for (const m of d.msgs) {
+      state.maxId = Math.max(state.maxId, m.id);
+      if (m.user_id === state.current && !state.msgs.some((x) => x.id === m.id)) { state.msgs.push(m); touched = true; }
+    }
+    if (state.maxId < 0) state.maxId = d.max_id;
+    if (touched) { renderMsgs(false); markRead(state.current); }
+    renderList(); if (state.current) renderTop();
+  } catch (e) { if (++failures >= 2) $("offline").classList.add("show"); }
+  setTimeout(poll, document.hidden ? 8000 : 2000);
+}
+
+// ---------- 事件 ----------
+function route(initial) {
+  const m = /^#u=(-?\d+)$/.exec(location.hash);
+  if (m) { const uid = Number(m[1]); if (uid !== state.current) openChat(uid, initial); } else if (state.current) closeChat();
+}
+$("send").onclick = send;
+$("text").addEventListener("input", autosize);
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !coarse) { e.preventDefault(); send(); } });
+$("text").addEventListener("paste", (e) => { const f = [...(e.clipboardData || {}).files || []][0]; if (f) { e.preventDefault(); setAttach(f); } });
+$("attach").onclick = () => $("file").click();
+$("file").onchange = (e) => setAttach(e.target.files[0]);
+$("attach-chip").querySelector("button").onclick = clearAttach;
+$("main").addEventListener("dragover", (e) => e.preventDefault());
+$("main").addEventListener("drop", (e) => { e.preventDefault(); if (state.current) setAttach(e.dataTransfer.files[0]); });
+$("back").onclick = () => { history.pushState(null, "", location.pathname); closeChat(); };
+$("search").oninput = (e) => { state.filter = e.target.value.trim(); renderList(); };
+$("lightbox").onclick = () => $("lightbox").classList.remove("show");
+$("lang").onchange = async (e) => { try { await api("api/chats/" + state.current + "/lang", { json: { lang: e.target.value } }); } catch (err) { alert(err.message); } };
+$("block").onclick = async () => {
+  const c = state.chats.find((x) => x.user_id === state.current); if (!c) return;
+  if (!c.blocked && !confirm("拉黑 " + (c.name || c.user_id) + "？之后对方发的消息不会再转发给你。")) return;
+  await api("api/chats/" + c.user_id + "/block", { json: { blocked: !c.blocked } }); c.blocked = !c.blocked; renderTop(); renderList();
+};
+addEventListener("hashchange", () => route(false));
+addEventListener("popstate", () => route(false));
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.current) markRead(state.current); });
+addEventListener("keydown", (e) => { if (e.key === "Escape") { if ($("lightbox").classList.contains("show")) $("lightbox").classList.remove("show"); } });
+
+(async function init() {
+  state.meta = await api("api/meta");
+  const sel = $("lang"); sel.append(new Option("未知语言", ""));
+  for (const [code, label] of Object.entries(state.meta.langs)) sel.append(new Option(label, code));
+  sel.options[0].disabled = true;
+  const first = await api("api/poll?after=-1");
+  state.chats = first.chats; state.maxId = first.max_id;
+  renderList(); route(true);
+  setTimeout(poll, 2000);
+})();
+</script>
+</body>
+</html>

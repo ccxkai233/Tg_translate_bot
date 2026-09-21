@@ -6,3 +6,6 @@ bot.db-journal
 venv/
 __pycache__/
 *.pyc
+
+# Web 面板缓存的图片/文件
+media_cache/
