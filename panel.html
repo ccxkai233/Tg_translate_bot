@@ -114,8 +114,10 @@ button, select, textarea { font: inherit; color: inherit; }
 #ai h2 { margin: 0; font-size: 18px; font-weight: 600; }
 #ai label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 #ai label small { font-size: 12px; }
-#ai input { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; width: 100%; min-width: 0; }
-#ai input:focus { border-color: var(--accent); }
+#ai input, #ai select { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; width: 100%; min-width: 0; }
+#ai select { cursor: pointer; }
+#ai select[hidden] { display: none; }
+#ai input:focus, #ai select:focus { border-color: var(--accent); }
 #ai .inline { display: flex; gap: 6px; }
 #ai button { border: 1px solid var(--line); background: var(--input); border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
 #ai button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -178,14 +180,13 @@ button, select, textarea { font: inherit; color: inherit; }
     <label>接口地址（OpenAI 兼容，填到 /v1 为止）<input id="ai-base" type="url" required spellcheck="false"></label>
     <label>API Key<input id="ai-key" type="password" spellcheck="false"><small id="ai-key-hint"></small></label>
     <label>模型
-      <span class="inline"><input id="ai-model" list="ai-models" required spellcheck="false"><button type="button" id="ai-fetch">获取列表</button></span>
-      <datalist id="ai-models"></datalist>
+      <span class="inline"><input id="ai-model" required spellcheck="false" placeholder="手动填写，或点「获取列表」选择"><button type="button" id="ai-fetch">获取列表</button><button type="button" id="ai-test" title="用这个模型真实翻译一句话，看能不能用">测试</button></span>
+      <select id="ai-models" hidden></select>
     </label>
     <label>温度（0 ~ 2，越低越稳定，翻译建议 0.2 ~ 0.4）<input id="ai-temp" type="number" min="0" max="2" step="0.1" required></label>
     <div id="ai-out"></div>
     <div class="actions">
       <button type="button" id="ai-reset" class="grow" title="清除面板里的设置，回到 .env 里的配置">恢复 .env</button>
-      <button type="button" id="ai-test">测试</button>
       <button type="button" id="ai-cancel">取消</button>
       <button type="submit" class="primary" id="ai-save">保存</button>
     </div>
@@ -451,31 +452,40 @@ function aiFill(c) {
   $("ai-key").placeholder = "当前 " + c.key_hint + "，留空不改";
   $("ai-key-hint").textContent = c.overridden.length ? "已在面板里改过：" + c.overridden.join("、") + "（优先于 .env）" : "当前使用 .env 里的配置";
 }
-function aiOut(text, bad) { const o = $("ai-out"); o.textContent = text; o.classList.toggle("bad", !!bad); }
+function aiOut(text, cls) { const o = $("ai-out"); o.textContent = text; o.className = cls || ""; }
 async function aiBusy(btn, label, fn) {
   const btns = $("ai").querySelectorAll("button"), old = btn.textContent;
   btns.forEach((b) => b.disabled = true); btn.textContent = label;
-  try { await fn(); } catch (e) { aiOut(e.message, true); }
+  try { await fn(); } catch (e) { aiOut("❌ " + e.message, "bad"); }
   btns.forEach((b) => b.disabled = false); btn.textContent = old;
 }
 $("gear").onclick = async () => {
-  aiOut("");
+  aiOut(""); $("ai-models").hidden = true;
   try { aiFill(await api("api/ai")); } catch (e) { alert(e.message); return; }
   $("ai").showModal();
 };
 $("ai-cancel").onclick = () => $("ai").close();
 $("ai-fetch").onclick = () => aiBusy($("ai-fetch"), "获取中…", async () => {
+  if (!$("ai-base").reportValidity()) return;
   const d = await api("api/ai/models", { json: aiForm() });
-  const list = $("ai-models"); list.textContent = "";
-  for (const id of d.models) list.append(new Option(id));
-  aiOut(d.models.length ? "共 " + d.models.length + " 个模型，点模型输入框可以选择" : "接口没有返回模型列表，请手动填写");
-  if (d.models.length) { $("ai-model").focus(); }
+  const sel = $("ai-models"), cur = $("ai-model").value.trim(); sel.textContent = "";
+  if (!d.models.length) { sel.hidden = true; aiOut("接口没有返回模型列表，请手动填写模型名"); return; }
+  sel.append(new Option("从 " + d.models.length + " 个模型中选择…", ""));
+  sel.options[0].disabled = true;
+  for (const id of d.models) sel.append(new Option(id, id));
+  sel.value = d.models.includes(cur) ? cur : "";
+  sel.hidden = false;
+  aiOut("已获取 " + d.models.length + " 个模型，在下拉框里选择后点「测试」确认能用");
 });
+$("ai-models").onchange = (e) => { if (e.target.value) { $("ai-model").value = e.target.value; aiOut(""); } };
+$("ai-model").oninput = () => { const sel = $("ai-models"); sel.value = [...sel.options].some((o) => o.value === $("ai-model").value.trim()) ? $("ai-model").value.trim() : ""; };
 $("ai-test").onclick = () => aiBusy($("ai-test"), "测试中…", async () => {
   if (!$("ai-form").reportValidity()) return;
-  aiOut("翻译测试句中…");
+  aiOut("正在用 " + aiForm().model + " 翻译测试句…");
   const d = await api("api/ai/test", { json: aiForm() });
-  aiOut("✅ 可用（" + d.ms + " ms）\n今天的会议改到下午三点，记得带上合同。\n→ " + d.output);
+  let text = "✅ " + d.model + " 可用（" + d.ms + " ms" + (d.tokens ? "，" + d.tokens + " tokens" : "") + "）";
+  if (d.reported_model && d.reported_model !== d.model) text += "\n⚠️ 接口回报实际使用的模型是 " + d.reported_model + "（可能是别名或被中转站替换）";
+  aiOut(text + "\n\n今天的会议改到下午三点，记得带上合同。\n→ " + d.output, "good");
 });
 $("ai-reset").onclick = () => aiBusy($("ai-reset"), "恢复中…", async () => {
   if (!confirm("清除面板里的设置，改回 .env 里的配置？")) return;

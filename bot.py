@@ -594,8 +594,11 @@ def build_prompt(glossary_id: int, text: str, target: str, ctx: str, replied) ->
     return "\n\n".join(parts)
 
 
-async def chat_completion(cfg: dict, messages: list[dict], retries: int = 3) -> tuple[str | None, str]:
-    """调一次 OpenAI 兼容的 /chat/completions。返回 (内容, 错误说明), 成功时错误说明为空。"""
+async def chat_completion(
+    cfg: dict, messages: list[dict], retries: int = 3, info: dict | None = None,
+) -> tuple[str | None, str]:
+    """调一次 OpenAI 兼容的 /chat/completions。返回 (内容, 错误说明), 成功时错误说明为空。
+    传了 info 就把接口实际回报的模型名和用量填进去 (面板测试用, 能看出中转站有没有偷换模型)。"""
     payload = {
         "model": cfg["model"],
         "max_tokens": 1500,
@@ -628,6 +631,9 @@ async def chat_completion(cfg: dict, messages: list[dict], retries: int = 3) -> 
                 return None, f"HTTP {r.status_code}: {r.text[:300]}"
             r.raise_for_status()
             data = r.json()
+            if info is not None:
+                info["model"] = data.get("model") or ""
+                info["usage"] = data.get("usage") or {}
             choices = data.get("choices") or []
             out = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
             return (out, "") if out else (None, "模型返回了空内容")
@@ -1204,15 +1210,19 @@ class PanelAPI:
         cfg, err = self._merge(body)
         if err:
             return {"error": err}
-        t0 = time.monotonic()
+        t0, info = time.monotonic(), {}
         out, err = await chat_completion(cfg, [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": build_prompt(
                 0, "今天的会议改到下午三点，记得带上合同。", "en", "", None)},
-        ], retries=1)
+        ], retries=1, info=info)
         if not out:
             return {"error": err}
-        return {"ok": True, "output": out, "ms": int((time.monotonic() - t0) * 1000)}
+        return {
+            "ok": True, "output": out, "ms": int((time.monotonic() - t0) * 1000),
+            "model": cfg["model"], "reported_model": info.get("model", ""),
+            "tokens": (info.get("usage") or {}).get("total_tokens"),
+        }
 
     async def ai_models(self, body: dict) -> dict:
         cfg, err = self._merge(body)
