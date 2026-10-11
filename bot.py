@@ -114,6 +114,8 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 # 任何 OpenAI 兼容接口都行 (官方 / 中转站 / 自建), 填到 /v1 为止
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 MODEL = os.environ.get("MODEL", "gpt-4o-mini")
+# 以上三项和温度都可以在 Web 面板里改, 改过的值存在 settings 表里, 优先于 .env
+TEMPERATURE = float(os.environ.get("TEMPERATURE", "0.3"))
 
 # --- 上下文窗口 ---
 CTX_MAX_MSGS = int(os.environ.get("CTX_MAX_MSGS", "10"))   # 最多回看几条
@@ -186,6 +188,8 @@ _db.execute(
     "  text TEXT, translated TEXT, kind TEXT, file_id TEXT, file_name TEXT, mime TEXT,"
     "  via TEXT, ts REAL)"
 )
+# 面板里改的配置 (目前只有翻译后端), 没有的键回落到 .env
+_db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
 _db.execute("CREATE INDEX IF NOT EXISTS relay_msgs_user ON relay_msgs (user_id, id)")
 # relay_users 是在面板之前建的, 老库补两列
 _cols = {r[1] for r in _db.execute("PRAGMA table_info(relay_users)")}
@@ -194,6 +198,40 @@ if "username" not in _cols:
 if "last_read" not in _cols:
     _db.execute("ALTER TABLE relay_users ADD COLUMN last_read INTEGER DEFAULT 0")
 _db.commit()
+
+
+AI_KEYS = ("base_url", "api_key", "model", "temperature")
+
+
+def ai_config() -> dict:
+    """当前生效的翻译后端配置: settings 表里的值优先, 没有就用 .env"""
+    saved = dict(_db.execute(
+        "SELECT substr(key, 4), value FROM settings WHERE key LIKE 'ai.%'"
+    ).fetchall())
+    try:
+        temp = float(saved["temperature"]) if "temperature" in saved else TEMPERATURE
+    except ValueError:
+        temp = TEMPERATURE
+    return {
+        "base_url": saved.get("base_url") or OPENAI_BASE_URL,
+        "api_key": saved.get("api_key") or OPENAI_API_KEY,
+        "model": saved.get("model") or MODEL,
+        "temperature": temp,
+        "overridden": sorted(k for k in saved if k in AI_KEYS),
+    }
+
+
+def ai_config_save(values: dict) -> None:
+    """values 里的键写入 settings; 值为 None 的键删掉 (回落到 .env)"""
+    for k, v in values.items():
+        if k not in AI_KEYS:
+            continue
+        if v is None:
+            _db.execute("DELETE FROM settings WHERE key = ?", (f"ai.{k}",))
+        else:
+            _db.execute("INSERT OR REPLACE INTO settings VALUES (?, ?)", (f"ai.{k}", str(v)))
+    _db.commit()
+    _cache.clear()  # 换了模型, 旧译文不再复用
 
 
 def is_opted_out(user_id: int) -> bool:
@@ -556,34 +594,29 @@ def build_prompt(glossary_id: int, text: str, target: str, ctx: str, replied) ->
     return "\n\n".join(parts)
 
 
-async def translate(glossary_id: int, text: str, target: str, ctx: str, replied) -> str | None:
-    key = (text, target, ctx_fingerprint(ctx), replied["mid"] if replied else 0)
-    hit = cache_get(key)
-    if hit is not None:
-        return hit
-
+async def chat_completion(cfg: dict, messages: list[dict], retries: int = 3) -> tuple[str | None, str]:
+    """调一次 OpenAI 兼容的 /chat/completions。返回 (内容, 错误说明), 成功时错误说明为空。"""
     payload = {
-        "model": MODEL,
+        "model": cfg["model"],
         "max_tokens": 1500,
-        "temperature": 0.3,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(glossary_id, text, target, ctx, replied)},
-        ],
+        "temperature": cfg["temperature"],
+        "messages": messages,
     }
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
 
-    for attempt in range(3):
+    err = "未知错误"
+    for attempt in range(retries):
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(
-                    f"{OPENAI_BASE_URL}/chat/completions",
+                    f"{cfg['base_url'].rstrip('/')}/chat/completions",
                     json=payload, headers=headers,
                 )
             if r.status_code in (429, 500, 502, 503, 504):
+                err = f"HTTP {r.status_code}: {r.text[:300]}"
                 await asyncio.sleep(2**attempt)
                 continue
             if 400 <= r.status_code < 500:
@@ -592,19 +625,33 @@ async def translate(glossary_id: int, text: str, target: str, ctx: str, replied)
                     "openai api error %d (not retrying): %s",
                     r.status_code, r.text[:300],
                 )
-                return None
+                return None, f"HTTP {r.status_code}: {r.text[:300]}"
             r.raise_for_status()
             data = r.json()
             choices = data.get("choices") or []
             out = ((choices[0].get("message") or {}).get("content") or "").strip() if choices else ""
-            if out:
-                cache_put(key, out)
-                return out
-            return None
+            return (out, "") if out else (None, "模型返回了空内容")
         except Exception as e:
-            log.warning("translate failed (attempt %d): %s", attempt + 1, e)
-            await asyncio.sleep(2**attempt)
-    return None
+            log.warning("chat completion failed (attempt %d): %s", attempt + 1, e)
+            err = f"{type(e).__name__}: {e}"
+            if attempt + 1 < retries:
+                await asyncio.sleep(2**attempt)
+    return None, err
+
+
+async def translate(glossary_id: int, text: str, target: str, ctx: str, replied) -> str | None:
+    key = (text, target, ctx_fingerprint(ctx), replied["mid"] if replied else 0)
+    hit = cache_get(key)
+    if hit is not None:
+        return hit
+
+    out, _ = await chat_completion(ai_config(), [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_prompt(glossary_id, text, target, ctx, replied)},
+    ])
+    if out:
+        cache_put(key, out)
+    return out
 
 
 # ---------------------------------------------------------------- 主人在场检查
@@ -1102,6 +1149,86 @@ class PanelAPI:
     def set_block(self, user_id: int, blocked: bool) -> None:
         relay_user_block(user_id, blocked)
         msg_add(user_id, "sys", "已拉黑，对方的消息不再转发" if blocked else "已解除拉黑", via="web")
+
+    # ---- 翻译后端配置 ----
+
+    @staticmethod
+    def _key_hint(key: str) -> str:
+        return f"{key[:3]}…{key[-4:]}" if len(key) > 10 else "已设置"
+
+    def ai_get(self) -> dict:
+        """给面板看的配置: key 只给打码后的样子"""
+        cfg = ai_config()
+        return {
+            "base_url": cfg["base_url"],
+            "model": cfg["model"],
+            "temperature": cfg["temperature"],
+            "key_hint": self._key_hint(cfg["api_key"]),
+            "overridden": cfg["overridden"],
+            "env": {"base_url": OPENAI_BASE_URL, "model": MODEL, "temperature": TEMPERATURE},
+        }
+
+    def _merge(self, body: dict) -> tuple[dict | None, str]:
+        """把面板提交的表单合并到当前配置上, 校验后返回 (cfg, 错误)。api_key 留空 = 不改。"""
+        cfg = ai_config()
+        base = str(body.get("base_url", cfg["base_url"])).strip().rstrip("/")
+        if not re.match(r"^https?://[^\s/]+", base):
+            return None, "接口地址要以 http:// 或 https:// 开头"
+        model = str(body.get("model", cfg["model"])).strip()
+        if not model:
+            return None, "模型名不能为空"
+        try:
+            temp = float(body.get("temperature", cfg["temperature"]))
+        except (TypeError, ValueError):
+            return None, "温度要是数字"
+        if not 0 <= temp <= 2:
+            return None, "温度要在 0 ~ 2 之间"
+        key = str(body.get("api_key") or "").strip() or cfg["api_key"]
+        return {"base_url": base, "api_key": key, "model": model, "temperature": temp}, ""
+
+    def ai_set(self, body: dict) -> dict:
+        if body.get("reset"):
+            ai_config_save({k: None for k in AI_KEYS})
+            log.info("panel: ai config reset to .env")
+            return self.ai_get()
+        cfg, err = self._merge(body)
+        if err:
+            return {"error": err}
+        env = {"base_url": OPENAI_BASE_URL, "api_key": OPENAI_API_KEY, "model": MODEL, "temperature": TEMPERATURE}
+        # 和 .env 一样的就不存, 以后改 .env 还能生效
+        ai_config_save({k: (None if cfg[k] == env[k] else cfg[k]) for k in AI_KEYS})
+        log.info("panel: ai config saved (model=%s, base=%s)", cfg["model"], cfg["base_url"])
+        return self.ai_get()
+
+    async def ai_test(self, body: dict) -> dict:
+        cfg, err = self._merge(body)
+        if err:
+            return {"error": err}
+        t0 = time.monotonic()
+        out, err = await chat_completion(cfg, [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_prompt(
+                0, "今天的会议改到下午三点，记得带上合同。", "en", "", None)},
+        ], retries=1)
+        if not out:
+            return {"error": err}
+        return {"ok": True, "output": out, "ms": int((time.monotonic() - t0) * 1000)}
+
+    async def ai_models(self, body: dict) -> dict:
+        cfg, err = self._merge(body)
+        if err:
+            return {"error": err}
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(
+                    f"{cfg['base_url']}/models",
+                    headers={"Authorization": f"Bearer {cfg['api_key']}"},
+                )
+            r.raise_for_status()
+            ids = sorted({m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and m.get("id")})
+        except Exception as e:
+            return {"error": f"获取模型列表失败：{e}"}
+        return {"models": ids}
 
     async def send(self, user_id: int, text: str, file) -> dict:
         """file: None 或 (bytes, 文件名, mime)。返回入库后的消息, 或 {"error": ...}。"""

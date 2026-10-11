@@ -167,6 +167,28 @@ def create_app(api, secret: str, secure_cookie: bool) -> web.Application:
         result = await api.send(uid, text, file)
         return web.json_response(result, status=400 if "error" in result else 200)
 
+    async def json_body(request) -> dict:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        return body if isinstance(body, dict) else {}
+
+    def result(data: dict):
+        return web.json_response(data, status=400 if "error" in data else 200)
+
+    async def ai_get(request):
+        return web.json_response(api.ai_get())
+
+    async def ai_set(request):
+        return result(api.ai_set(await json_body(request)))
+
+    async def ai_test(request):
+        return result(await api.ai_test(await json_body(request)))
+
+    async def ai_models(request):
+        return result(await api.ai_models(await json_body(request)))
+
     async def media(request):
         try:
             found = await api.media(int(request.match_info["mid"]))
@@ -195,6 +217,10 @@ def create_app(api, secret: str, secure_cookie: bool) -> web.Application:
         web.post("/api/chats/{uid}/block", set_block),
         web.post("/api/chats/{uid}/send", send),
         web.get("/api/media/{mid}", media),
+        web.get("/api/ai", ai_get),
+        web.post("/api/ai", ai_set),
+        web.post("/api/ai/test", ai_test),
+        web.post("/api/ai/models", ai_models),
     ])
     return app
 

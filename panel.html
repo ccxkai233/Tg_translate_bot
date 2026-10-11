@@ -105,6 +105,27 @@ button, select, textarea { font: inherit; color: inherit; }
 #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; place-items: center; z-index: 10; cursor: zoom-out; }
 #lightbox.show { display: grid; }
 #lightbox img { max-width: 96vw; max-height: 96vh; }
+/* ---------- AI 设置 ---------- */
+#gear { flex: none; border: 0; background: none; cursor: pointer; font-size: 20px; padding: 4px; color: var(--muted); border-radius: 50%; }
+#gear:hover { background: var(--hover); }
+#ai { border: 0; border-radius: 14px; padding: 0; width: min(480px, calc(100vw - 32px)); background: var(--side); color: var(--text); box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+#ai::backdrop { background: rgba(0,0,0,.45); }
+#ai form { padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+#ai h2 { margin: 0; font-size: 18px; font-weight: 600; }
+#ai label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+#ai label small { font-size: 12px; }
+#ai input { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; outline: none; width: 100%; min-width: 0; }
+#ai input:focus { border-color: var(--accent); }
+#ai .inline { display: flex; gap: 6px; }
+#ai button { border: 1px solid var(--line); background: var(--input); border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+#ai button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+#ai button:disabled { opacity: .5; cursor: default; }
+#ai .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; margin-top: 4px; }
+#ai .actions .grow { margin-right: auto; }
+#ai-out { font-size: 13px; white-space: pre-wrap; word-break: break-word; border-radius: 8px; padding: 8px 10px; background: var(--hover); max-height: 160px; overflow-y: auto; }
+#ai-out:empty { display: none; }
+#ai-out.bad { color: var(--danger); }
+
 #offline { display: none; position: fixed; top: 8px; left: 50%; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 4px 14px; border-radius: 14px; font-size: 13px; z-index: 20; }
 #offline.show { display: block; }
 
@@ -123,7 +144,7 @@ button, select, textarea { font: inherit; color: inherit; }
 <div id="offline">连接中断，正在重试…</div>
 <div id="app">
   <aside id="side">
-    <header><h1>对话</h1><input id="search" type="search" placeholder="搜索" autocomplete="off"></header>
+    <header><h1>对话</h1><input id="search" type="search" placeholder="搜索" autocomplete="off"><button id="gear" title="翻译模型设置">⚙️</button></header>
     <div id="list"><div class="empty">加载中…</div></div>
   </aside>
   <main id="main">
@@ -151,6 +172,25 @@ button, select, textarea { font: inherit; color: inherit; }
   </main>
 </div>
 <div id="lightbox"><img alt=""></div>
+<dialog id="ai">
+  <form method="dialog" id="ai-form" autocomplete="off">
+    <h2>翻译模型</h2>
+    <label>接口地址（OpenAI 兼容，填到 /v1 为止）<input id="ai-base" type="url" required spellcheck="false"></label>
+    <label>API Key<input id="ai-key" type="password" spellcheck="false"><small id="ai-key-hint"></small></label>
+    <label>模型
+      <span class="inline"><input id="ai-model" list="ai-models" required spellcheck="false"><button type="button" id="ai-fetch">获取列表</button></span>
+      <datalist id="ai-models"></datalist>
+    </label>
+    <label>温度（0 ~ 2，越低越稳定，翻译建议 0.2 ~ 0.4）<input id="ai-temp" type="number" min="0" max="2" step="0.1" required></label>
+    <div id="ai-out"></div>
+    <div class="actions">
+      <button type="button" id="ai-reset" class="grow" title="清除面板里的设置，回到 .env 里的配置">恢复 .env</button>
+      <button type="button" id="ai-test">测试</button>
+      <button type="button" id="ai-cancel">取消</button>
+      <button type="submit" class="primary" id="ai-save">保存</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 "use strict";
@@ -402,6 +442,54 @@ $("block").onclick = async () => {
   if (!c.blocked && !confirm("拉黑 " + (c.name || c.user_id) + "？之后对方发的消息不会再转发给你。")) return;
   await api("api/chats/" + c.user_id + "/block", { json: { blocked: !c.blocked } }); c.blocked = !c.blocked; renderTop(); renderList();
 };
+// ---------- AI 设置 ----------
+function aiForm() {
+  return { base_url: $("ai-base").value.trim(), api_key: $("ai-key").value.trim(), model: $("ai-model").value.trim(), temperature: Number($("ai-temp").value) };
+}
+function aiFill(c) {
+  $("ai-base").value = c.base_url; $("ai-model").value = c.model; $("ai-temp").value = c.temperature; $("ai-key").value = "";
+  $("ai-key").placeholder = "当前 " + c.key_hint + "，留空不改";
+  $("ai-key-hint").textContent = c.overridden.length ? "已在面板里改过：" + c.overridden.join("、") + "（优先于 .env）" : "当前使用 .env 里的配置";
+}
+function aiOut(text, bad) { const o = $("ai-out"); o.textContent = text; o.classList.toggle("bad", !!bad); }
+async function aiBusy(btn, label, fn) {
+  const btns = $("ai").querySelectorAll("button"), old = btn.textContent;
+  btns.forEach((b) => b.disabled = true); btn.textContent = label;
+  try { await fn(); } catch (e) { aiOut(e.message, true); }
+  btns.forEach((b) => b.disabled = false); btn.textContent = old;
+}
+$("gear").onclick = async () => {
+  aiOut("");
+  try { aiFill(await api("api/ai")); } catch (e) { alert(e.message); return; }
+  $("ai").showModal();
+};
+$("ai-cancel").onclick = () => $("ai").close();
+$("ai-fetch").onclick = () => aiBusy($("ai-fetch"), "获取中…", async () => {
+  const d = await api("api/ai/models", { json: aiForm() });
+  const list = $("ai-models"); list.textContent = "";
+  for (const id of d.models) list.append(new Option(id));
+  aiOut(d.models.length ? "共 " + d.models.length + " 个模型，点模型输入框可以选择" : "接口没有返回模型列表，请手动填写");
+  if (d.models.length) { $("ai-model").focus(); }
+});
+$("ai-test").onclick = () => aiBusy($("ai-test"), "测试中…", async () => {
+  if (!$("ai-form").reportValidity()) return;
+  aiOut("翻译测试句中…");
+  const d = await api("api/ai/test", { json: aiForm() });
+  aiOut("✅ 可用（" + d.ms + " ms）\n今天的会议改到下午三点，记得带上合同。\n→ " + d.output);
+});
+$("ai-reset").onclick = () => aiBusy($("ai-reset"), "恢复中…", async () => {
+  if (!confirm("清除面板里的设置，改回 .env 里的配置？")) return;
+  aiFill(await api("api/ai", { json: { reset: true } })); aiOut("已恢复为 .env 里的配置");
+});
+$("ai-form").onsubmit = (e) => {
+  e.preventDefault();
+  aiBusy($("ai-save"), "保存中…", async () => {
+    aiFill(await api("api/ai", { json: aiForm() }));
+    aiOut("✅ 已保存，之后的翻译立即使用新模型");
+    setTimeout(() => $("ai").close(), 700);
+  });
+};
+
 addEventListener("hashchange", () => route(false));
 addEventListener("popstate", () => route(false));
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.current) markRead(state.current); });
